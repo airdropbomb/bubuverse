@@ -14,6 +14,7 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
+from capmonster_python import RecaptchaV2Task  # CapMonster for reCAPTCHA v2
 
 init(autoreset=True)
 
@@ -27,6 +28,19 @@ if not ENCRYPTION_KEY:
         f.write(f'ENCRYPTION_KEY={ENCRYPTION_KEY}\n')
     print(Fore.YELLOW + "[!] New encryption key generated and saved to .env file.")
 cipher = Fernet(ENCRYPTION_KEY.encode())
+
+# Load CapMonster API key from api.txt
+async def load_api_key(file_path='api.txt'):
+    try:
+        async with aiofiles.open(file_path, mode='r') as f:
+            api_key = (await f.read()).strip()
+            if not api_key:
+                print(Fore.RED + "[!] Error: api.txt is empty. Please add a valid CapMonster API key.")
+                return None
+            return api_key
+    except FileNotFoundError:
+        print(Fore.RED + "[!] Error: api.txt not found. Please create api.txt with your CapMonster API key.")
+        return None
 
 async def load_file(file_path):
     try:
@@ -101,8 +115,24 @@ async def load_wallet_data(file_path):
     except FileNotFoundError:
         return []
 
+async def solve_captcha(capmonster_client, website_url, website_key):
+    try:
+        task = RecaptchaV2Task(capmonster_client)
+        task_id = task.create_task(website_url=website_url, website_key=website_key)
+        result = task.join_task_result(task_id)
+        return result.get("gRecaptchaResponse")
+    except Exception as e:
+        print(Fore.RED + f"[!] Error solving CAPTCHA: {str(e)}")
+        return None
+
 async def create_wallets(user_agents, wallet_data):
     proxies = await load_proxies('proxy.txt')
+    api_key = await load_api_key('api.txt')
+    if not api_key:
+        print(Fore.RED + "[!] Cannot proceed without a valid CapMonster API key.")
+        return
+    capmonster_client = CapMonsterClient(api_key=api_key)
+
     if not user_agents:
         print(Fore.RED + "[!] Error: No user agents found in ua.txt. Please populate ua.txt with valid user agent strings.")
         return
@@ -135,7 +165,15 @@ async def create_wallets(user_agents, wallet_data):
 
         browser = None
         try:
-            browser_args = ['--no-sandbox', '--disable-setuid-sandbox']
+            browser_args = [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-blink-features=AutomationControlled',
+                '--no-first-run',
+                '--disable-infobars'
+            ]
             if proxy:
                 browser_args.append(f'--proxy-server={proxy["host"]}:{proxy["port"]}')
             browser = await launch(
@@ -150,13 +188,21 @@ async def create_wallets(user_agents, wallet_data):
                 })
             await page.setViewport({'width': 1024, 'height': 768})
             await page.setUserAgent(user_agent)
-            await stealth(page)  # Apply stealth mode by default
+            await stealth(page)  # Apply stealth mode
+
+            # Additional stealth settings
+            await page.evaluateOnNewDocument('''() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                window.navigator.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            }''')
 
             target_url = 'https://bubuverse.fun/space'
             print(Fore.YELLOW + f"[DEBUG] Navigating to {target_url}")
             await page.goto(target_url, {'waitUntil': 'networkidle2', 'timeout': 60000})
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)  # Increased wait time for CAPTCHA loading
 
             page_title = await page.title()
             current_url = page.url
@@ -166,8 +212,44 @@ async def create_wallets(user_agents, wallet_data):
             if 'bubuverse.fun' not in current_url:
                 raise Exception(f'Redirect: {current_url}')
 
-            if 'error' in page_title.lower() or 'blocked' in page_title.lower():
-                raise Exception(f'Error page: {page_title}')
+            if 'error' in page_title.lower() or 'blocked' in page_title.lower() or 'checkpoint' in page_title.lower():
+                print(Fore.YELLOW + "[!] Detected Vercel Security Checkpoint. Attempting to solve CAPTCHA...")
+
+                # Get site key for reCAPTCHA
+                website_key = await page.evaluate('''() => {
+                    const element = document.querySelector('[data-sitekey]');
+                    return element ? element.getAttribute('data-sitekey') : null;
+                }''')
+                if not website_key:
+                    raise Exception("Could not find reCAPTCHA site key!")
+
+                print(Fore.YELLOW + f"[DEBUG] Found reCAPTCHA site key: {website_key}")
+
+                # Solve CAPTCHA using CapMonster
+                captcha_solution = await solve_captcha(capmonster_client, target_url, website_key)
+                if not captcha_solution:
+                    raise Exception("Failed to solve CAPTCHA!")
+
+                print(Fore.GREEN + f"[DEBUG] CAPTCHA solved: {captcha_solution}")
+
+                # Inject CAPTCHA solution
+                await page.evaluate(f'''(solution) => {{
+                    document.getElementById("g-recaptcha-response").innerHTML = "{captcha_solution}";
+                }}''', captcha_solution)
+
+                # Submit CAPTCHA form if required
+                await page.evaluate('''() => {
+                    const submitButton = document.querySelector('button[type="submit"]') || document.querySelector('#recaptcha-demo-submit');
+                    if (submitButton) submitButton.click();
+                }''')
+
+                await asyncio.sleep(5)  # Wait for page to process CAPTCHA
+
+                # Re-check page title and URL
+                page_title = await page.title()
+                current_url = page.url
+                print(Fore.YELLOW + f"[DEBUG] Post-CAPTCHA Page title: {page_title}")
+                print(Fore.YELLOW + f"[DEBUG] Post-CAPTCHA Current URL: {current_url}")
 
             cookies = await page.cookies()
             print(Fore.YELLOW + f"[DEBUG] Cookies: {cookies}")
