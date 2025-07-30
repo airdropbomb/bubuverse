@@ -7,6 +7,7 @@ import uuid
 from colorama import Fore, init
 from pyppeteer import launch
 from mnemonic import Mnemonic  # Replaced bip39 with mnemonic
+from pyppeteer_stealth import stealth
 from solders.keypair import Keypair
 import base58
 import aiofiles
@@ -58,6 +59,7 @@ async def get_browser_session(user_agent):
         page = await browser.newPage()
         await page.setViewport({'width': 1024, 'height': 768})
         await page.setUserAgent(user_agent)
+        await stealth(page)  # Apply stealth to avoid bot detection
 
         target_url = 'https://bubuverse.fun/space'
         await page.goto(target_url, {'waitUntil': 'networkidle2', 'timeout': 60000})
@@ -74,12 +76,9 @@ async def get_browser_session(user_agent):
             raise Exception(f'Error page: {page_title}')
 
         cookies = await page.cookies()
-        cookie_string = ''
-        for cookie in cookies:
-            cookie_string += f"{cookie['name']}={cookie['value']}; "
-        cookie_string = cookie_string[:-2]
+        cookie_string = '; '.join(f"{cookie['name']}={cookie['value']}" for cookie in cookies)
+        vcrcs_cookie = next((cookie for cookie in cookies if cookie['name'] == '_vcrcs'), None)
 
-        vcrcs_cookie = next((c for c in cookies if c['name'] == '_vcrcs'), None)
         if not vcrcs_cookie:
             raise Exception('Could not find _vcrcs cookie')
 
