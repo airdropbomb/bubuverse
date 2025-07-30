@@ -6,11 +6,10 @@ import random
 import uuid
 from colorama import Fore, init
 from pyppeteer import launch
-from bip39 import generate_mnemonic, mnemonic_to_seed
+from mnemonic import Mnemonic  # Replaced bip39 with mnemonic
 from solders.keypair import Keypair
 import base58
 import aiofiles
-import readline
 
 init(autoreset=True)
 
@@ -36,7 +35,7 @@ async def save_wallet_data(file_path, data):
 
 def sign_message(message, private_key):
     from solders.signature import Signature
-    keypair = Keypair.from_bytes(base58.decode(private_key))
+    keypair = Keypair.from_bytes(base58.b58decode(private_key))  # Use base58
     return str(keypair.sign_message(message.encode()))
 
 def get_nft_info(template_id):
@@ -108,16 +107,15 @@ async def create_wallets(user_agents, wallet_data):
         user_agent = random.choice(user_agents)
         device_id = str(uuid.uuid4()).replace('-', '')
 
-        mnemonic = generate_mnemonic(128)
-        seed = mnemonic_to_seed(mnemonic)
-        path = "m/44'/501'/0'/0'"
-        from solders.keypair import Keypair
-        from solders import ed25519
-        derived = ed25519.derive_path(path, seed.hex()).key
-        keypair = Keypair.from_seed(derived)
+        # Use mnemonic package to generate mnemonic and seed
+        mnemo = Mnemonic("english")
+        mnemonic = mnemo.generate(strength=128)  # Generate 12-word mnemonic (128-bit)
+        seed = mnemo.to_seed(mnemonic)  # Convert mnemonic to seed
 
+        # Derive Solana keypair from seed
+        keypair = Keypair.from_seed(seed[:32])  # Use first 32 bytes of seed
         public_key = str(keypair.pubkey())
-        private_key = base58.encode(keypair.secret())
+        private_key = base58.b58encode(keypair.secret())
 
         print(f'🌐 Creating wallet: {public_key}')
         print(f'↳ Device ID: {device_id}')
@@ -218,7 +216,7 @@ async def create_wallets(user_agents, wallet_data):
 
     print(Fore.GREEN + '\n✅ Done. Wallets saved to wallet_sol.json')
     print(Fore.CYAN + f'📊 Total wallets created: {len(wallet_data)}')
-
+    
 async def get_boxes_with_puppeteer(page, wallet_address):
     try:
         timestamp = int(time.time() * 1000)
