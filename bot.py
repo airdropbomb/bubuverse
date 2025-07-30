@@ -59,15 +59,18 @@ async def get_browser_session(user_agent):
         page = await browser.newPage()
         await page.setViewport({'width': 1024, 'height': 768})
         await page.setUserAgent(user_agent)
-        await stealth(page)  # Apply stealth to avoid bot detection
+        await stealth(page)
 
         target_url = 'https://bubuverse.fun/space'
+        print(Fore.YELLOW + f"[DEBUG] Navigating to {target_url}")
         await page.goto(target_url, {'waitUntil': 'networkidle2', 'timeout': 60000})
 
         await asyncio.sleep(15)
 
         page_title = await page.title()
         current_url = page.url
+        print(Fore.YELLOW + f"[DEBUG] Page title: {page_title}")
+        print(Fore.YELLOW + f"[DEBUG] Current URL: {current_url}")
 
         if 'bubuverse.fun' not in current_url:
             raise Exception(f'Redirect: {current_url}')
@@ -76,12 +79,14 @@ async def get_browser_session(user_agent):
             raise Exception(f'Error page: {page_title}')
 
         cookies = await page.cookies()
+        print(Fore.YELLOW + f"[DEBUG] Cookies: {cookies}")  # Debug cookies
         cookie_string = '; '.join(f"{cookie['name']}={cookie['value']}" for cookie in cookies)
         vcrcs_cookie = next((cookie for cookie in cookies if cookie['name'] == '_vcrcs'), None)
 
         if not vcrcs_cookie:
             raise Exception('Could not find _vcrcs cookie')
 
+        print(Fore.GREEN + f"[DEBUG] Found _vcrcs cookie: {vcrcs_cookie['value']}")
         return {
             'vcrcs_cookie': vcrcs_cookie['value'],
             'all_cookies': cookie_string,
