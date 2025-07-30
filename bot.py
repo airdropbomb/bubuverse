@@ -14,8 +14,7 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from capmonster_python.recaptcha_v2 import RecaptchaV2Task  # Import reCAPTCHA v2 task
-from capmonster_python.capmonster_client import CapMonsterClient  # Import CapMonsterClient
+from capmonster_python import RecaptchaV2Task, CapMonsterClient
 
 init(autoreset=True)
 
