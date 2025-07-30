@@ -18,9 +18,26 @@ init(autoreset=True)
 async def load_file(file_path):
     try:
         async with aiofiles.open(file_path, mode='r') as f:
-            return [line.strip() for line in await f.readlines()]
+            lines = [line.strip() for line in await f.readlines()]
+            if not lines:
+                print(Fore.YELLOW + "[!] ua.txt is empty. Generating random user agents...")
+                generated = [
+                    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
+                    for _ in range(1000)
+                ]
+                async with aiofiles.open(file_path, mode='w') as f:
+                    await f.write('\n'.join(generated))
+                return generated
+            return lines
     except FileNotFoundError:
-        return []
+        print(Fore.YELLOW + "[!] ua.txt not found. Generating random user agents...")
+        generated = [
+            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
+            for _ in range(1000)
+        ]
+        async with aiofiles.open(file_path, mode='w') as f:
+            await f.write('\n'.join(generated))
+        return generated
 
 async def load_wallet_data(file_path):
     try:
