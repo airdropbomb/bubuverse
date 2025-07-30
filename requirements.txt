@@ -1,7 +1,7 @@
 pyppeteer
 bip39
 solders
-bs58
+base58
 colorama
 python-dotenv
 aiofiles
