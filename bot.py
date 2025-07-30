@@ -8,7 +8,7 @@ from colorama import Fore, init
 from pyppeteer import launch
 from bip39 import generate_mnemonic, mnemonic_to_seed
 from solders.keypair import Keypair
-import bs58
+import base58
 import aiofiles
 import readline
 
@@ -36,7 +36,7 @@ async def save_wallet_data(file_path, data):
 
 def sign_message(message, private_key):
     from solders.signature import Signature
-    keypair = Keypair.from_bytes(bs58.decode(private_key))
+    keypair = Keypair.from_bytes(base58.decode(private_key))
     return str(keypair.sign_message(message.encode()))
 
 def get_nft_info(template_id):
@@ -117,7 +117,7 @@ async def create_wallets(user_agents, wallet_data):
         keypair = Keypair.from_seed(derived)
 
         public_key = str(keypair.pubkey())
-        private_key = bs58.encode(keypair.secret())
+        private_key = base58.encode(keypair.secret())
 
         print(f'🌐 Creating wallet: {public_key}')
         print(f'↳ Device ID: {device_id}')
