@@ -1,5 +1,5 @@
 pyppeteer
-bip39
+mnemonic
 solders
 base58
 colorama
