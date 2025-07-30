@@ -4,121 +4,113 @@ import os
 import time
 import random
 import uuid
+import re
 from colorama import Fore, init
 from pyppeteer import launch
-from mnemonic import Mnemonic  # Replaced bip39 with mnemonic
 from pyppeteer_stealth import stealth
+from mnemonic import Mnemonic
 from solders.keypair import Keypair
 import base58
 import aiofiles
+from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
 init(autoreset=True)
 
-# Utility functions
+# Load encryption key from .env file
+load_dotenv()
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    print(Fore.RED + "[!] Error: ENCRYPTION_KEY not found in .env file. Generating a new key...")
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+    with open('.env', 'w') as f:
+        f.write(f'ENCRYPTION_KEY={ENCRYPTION_KEY}\n')
+    print(Fore.YELLOW + "[!] New encryption key generated and saved to .env file.")
+cipher = Fernet(ENCRYPTION_KEY.encode())
+
 async def load_file(file_path):
     try:
         async with aiofiles.open(file_path, mode='r') as f:
             lines = [line.strip() for line in await f.readlines()]
             if not lines:
-                print(Fore.YELLOW + "[!] ua.txt is empty. Generating random user agents...")
+                print(Fore.YELLOW + f"[!] {file_path} is empty. Generating random user agents...")
                 generated = [
                     f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
                     for _ in range(1000)
                 ]
                 async with aiofiles.open(file_path, mode='w') as f:
                     await f.write('\n'.join(generated))
+                print(Fore.GREEN + f"[+] Generated {len(generated)} user agents and saved to {file_path}")
                 return generated
             return lines
     except FileNotFoundError:
-        print(Fore.YELLOW + "[!] ua.txt not found. Generating random user agents...")
+        print(Fore.YELLOW + f"[!] {file_path} not found. Generating random user agents...")
         generated = [
             f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
             for _ in range(1000)
         ]
         async with aiofiles.open(file_path, mode='w') as f:
             await f.write('\n'.join(generated))
+        print(Fore.GREEN + f"[+] Generated {len(generated)} user agents and saved to {file_path}")
         return generated
+
+async def load_proxies(file_path):
+    try:
+        async with aiofiles.open(file_path, mode='r') as f:
+            return [line.strip() for line in await f.readlines() if line.strip()]
+    except FileNotFoundError:
+        print(Fore.YELLOW + "[!] proxy.txt not found. Running without proxy.")
+        return []
+
+def parse_proxy(proxy_string):
+    match = re.match(r'^(https?:\/\/)?([^:]+):([^@]+)@([^:]+):(\d+)$', proxy_string)
+    if match:
+        return {
+            'host': match[4],
+            'port': int(match[5]),
+            'username': match[2],
+            'password': match[3]
+        }
+    parts = proxy_string.split(':')
+    if len(parts) == 4:
+        return {
+            'host': parts[0],
+            'port': int(parts[1]),
+            'username': parts[2],
+            'password': parts[3]
+        }
+    raise ValueError(f"Invalid proxy format: {proxy_string}")
+
+async def save_wallet_data(file_path, data):
+    encrypted_data = []
+    for wallet in data:
+        wallet_copy = wallet.copy()
+        wallet_copy['privateKey'] = cipher.encrypt(wallet_copy['privateKey'].encode()).decode()
+        encrypted_data.append(wallet_copy)
+    async with aiofiles.open(file_path, mode='w') as f:
+        await f.write(json.dumps(encrypted_data, indent=2))
 
 async def load_wallet_data(file_path):
     try:
         async with aiofiles.open(file_path, mode='r') as f:
             content = await f.read()
-            return json.loads(content) if content else []
+            data = json.loads(content) if content else []
+            for wallet in data:
+                wallet['privateKey'] = cipher.decrypt(wallet['privateKey'].encode()).decode()
+            return data
     except FileNotFoundError:
         return []
 
-async def save_wallet_data(file_path, data):
-    async with aiofiles.open(file_path, mode='w') as f:
-        await f.write(json.dumps(data, indent=2))
-
-def sign_message(message, private_key):
-    from solders.signature import Signature
-    keypair = Keypair.from_bytes(base58.b58decode(private_key))  # Use base58
-    return str(keypair.sign_message(message.encode()))
-
-def get_nft_info(template_id):
-    rarity_map = {
-        'labubu-00000-1': {'name': 'Blooming Spirit', 'rarity': 'NFT 10x', 'color': Fore.GREEN},
-        'labubu-00000-2': {'name': 'Wise Spirit', 'rarity': 'NFT 10x', 'color': Fore.GREEN},
-        'labubu-00000-3': {'name': 'Guardian Spirit', 'rarity': 'NFT 10x', 'color': Fore.GREEN},
-        'labubu-00000-4': {'name': 'Midnight Spirit', 'rarity': 'NFT 100x', 'color': Fore.YELLOW},
-        'labubu-00000-5': {'name': 'Starlight Angel', 'rarity': 'NFT 1000x', 'color': Fore.MAGENTA}
-    }
-    return rarity_map.get(template_id, {'name': 'Unknown', 'rarity': 'Unknown', 'color': Fore.LIGHTBLACK_EX})
-
-async def get_browser_session(user_agent):
-    browser = None
-    try:
-        browser = await launch(
-            headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
-        )
-        page = await browser.newPage()
-        await page.setViewport({'width': 1024, 'height': 768})
-        await page.setUserAgent(user_agent)
-        await stealth(page)
-
-        target_url = 'https://bubuverse.fun/space'
-        print(Fore.YELLOW + f"[DEBUG] Navigating to {target_url}")
-        await page.goto(target_url, {'waitUntil': 'networkidle2', 'timeout': 60000})
-
-        await asyncio.sleep(15)
-
-        page_title = await page.title()
-        current_url = page.url
-        print(Fore.YELLOW + f"[DEBUG] Page title: {page_title}")
-        print(Fore.YELLOW + f"[DEBUG] Current URL: {current_url}")
-
-        if 'bubuverse.fun' not in current_url:
-            raise Exception(f'Redirect: {current_url}')
-
-        if 'error' in page_title.lower() or 'blocked' in page_title.lower():
-            raise Exception(f'Error page: {page_title}')
-
-        cookies = await page.cookies()
-        print(Fore.YELLOW + f"[DEBUG] Cookies: {cookies}")  # Debug cookies
-        cookie_string = '; '.join(f"{cookie['name']}={cookie['value']}" for cookie in cookies)
-        vcrcs_cookie = next((cookie for cookie in cookies if cookie['name'] == '_vcrcs'), None)
-
-        if not vcrcs_cookie:
-            raise Exception('Could not find _vcrcs cookie')
-
-        print(Fore.GREEN + f"[DEBUG] Found _vcrcs cookie: {vcrcs_cookie['value']}")
-        return {
-            'vcrcs_cookie': vcrcs_cookie['value'],
-            'all_cookies': cookie_string,
-            'cookie_created_at': time.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
-            'cookie_expires_at': time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() + 3600)),
-            'user_agent': user_agent,
-            'page': page,
-            'browser': browser
-        }
-    except Exception as e:
-        if browser:
-            await browser.close()
-        raise Exception(f'Failed to get browser session: {str(e)}')
-
 async def create_wallets(user_agents, wallet_data):
+    proxies = await load_proxies('proxy.txt')
+    if not user_agents:
+        print(Fore.RED + "[!] Error: No user agents found in ua.txt. Please populate ua.txt with valid user agent strings.")
+        return
+    if not proxies:
+        print(Fore.YELLOW + "[!] No proxies found. Running without proxy.")
+    elif len(proxies) < count:
+        print(Fore.YELLOW + f"[!] Warning: Only {len(proxies)} proxies available for {count} wallets. Some wallets may reuse proxies.")
+
     referrer_address = input(Fore.YELLOW + 'Enter referrerAddress: ')
     count = int(input(Fore.YELLOW + 'Enter number of wallets to create: '))
 
@@ -127,40 +119,64 @@ async def create_wallets(user_agents, wallet_data):
 
         user_agent = random.choice(user_agents)
         device_id = str(uuid.uuid4()).replace('-', '')
+        proxy = parse_proxy(proxies[i % len(proxies)]) if proxies else None
 
-        # Use mnemonic package to generate mnemonic and seed
         mnemo = Mnemonic("english")
-        mnemonic = mnemo.generate(strength=128)  # Generate 12-word mnemonic (128-bit)
-        seed = mnemo.to_seed(mnemonic)  # Convert mnemonic to seed
-
-        # Derive Solana keypair from seed
-        keypair = Keypair.from_seed(seed[:32])  # Use first 32 bytes of seed
+        mnemonic = mnemo.generate(strength=128)
+        seed = mnemo.to_seed(mnemonic)
+        keypair = Keypair.from_seed(seed[:32])
         public_key = str(keypair.pubkey())
         private_key = base58.b58encode(keypair.secret())
 
-        print(f'🌐 Creating wallet: {public_key}')
-        print(f'↳ Device ID: {device_id}')
+        print(Fore.CYAN + f'🌐 Creating wallet: {public_key}')
+        print(Fore.CYAN + f'↳ Device ID: {device_id}')
+        if proxy:
+            print(Fore.CYAN + f'↳ Proxy: {proxy["host"]}:{proxy["port"]}')
 
         browser = None
         try:
+            browser_args = ['--no-sandbox', '--disable-setuid-sandbox']
+            if proxy:
+                browser_args.append(f'--proxy-server={proxy["host"]}:{proxy["port"]}')
             browser = await launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
+                args=browser_args
             )
             page = await browser.newPage()
+            if proxy and proxy.get('username') and proxy.get('password'):
+                await page.authenticate({
+                    'username': proxy['username'],
+                    'password': proxy['password']
+                })
             await page.setViewport({'width': 1024, 'height': 768})
             await page.setUserAgent(user_agent)
+            await stealth(page)  # Apply stealth mode by default
 
             target_url = 'https://bubuverse.fun/space'
+            print(Fore.YELLOW + f"[DEBUG] Navigating to {target_url}")
             await page.goto(target_url, {'waitUntil': 'networkidle2', 'timeout': 60000})
 
-            await asyncio.sleep(20)
+            await asyncio.sleep(15)
+
+            page_title = await page.title()
+            current_url = page.url
+            print(Fore.YELLOW + f"[DEBUG] Page title: {page_title}")
+            print(Fore.YELLOW + f"[DEBUG] Current URL: {current_url}")
+
+            if 'bubuverse.fun' not in current_url:
+                raise Exception(f'Redirect: {current_url}')
+
+            if 'error' in page_title.lower() or 'blocked' in page_title.lower():
+                raise Exception(f'Error page: {page_title}')
 
             cookies = await page.cookies()
+            print(Fore.YELLOW + f"[DEBUG] Cookies: {cookies}")
             vcrcs_cookie = next((c for c in cookies if c['name'] == '_vcrcs'), None)
 
             if not vcrcs_cookie:
                 raise Exception("Could not find _vcrcs cookie!")
+
+            print(Fore.GREEN + f"[DEBUG] Found _vcrcs cookie: {vcrcs_cookie['value']}")
 
             max_retries = 3
             attempt = 0
@@ -213,7 +229,7 @@ async def create_wallets(user_agents, wallet_data):
             if response['ok']:
                 wallet = {
                     'mnemonic': mnemonic,
-                    'privateKey': private_key,
+                    'privateKey': private_key.decode(),
                     'publicKey': public_key,
                     'deviceId': device_id,
                     'userAgent': user_agent
@@ -237,406 +253,37 @@ async def create_wallets(user_agents, wallet_data):
 
     print(Fore.GREEN + '\n✅ Done. Wallets saved to wallet_sol.json')
     print(Fore.CYAN + f'📊 Total wallets created: {len(wallet_data)}')
-    
-async def get_boxes_with_puppeteer(page, wallet_address):
-    try:
-        timestamp = int(time.time() * 1000)
-        api_url = f'https://bubuverse.fun/api/users/{wallet_address}/blind-boxes?status=unopened&_t={timestamp}'
-
-        response = await page.evaluate('''
-            async (url) => {
-                const response = await fetch(url, {
-                    method: 'GET',
-                    headers: {
-                        'accept': '*/*',
-                        'referer': 'https://bubuverse.fun/space'
-                    },
-                    mode: 'cors',
-                    credentials: 'include'
-                });
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                return await response.json();
-            }
-        ''', api_url)
-
-        return response.get('data', [])
-    except Exception as e:
-        raise Exception(f'Failed to get boxes: {str(e)}')
-
-async def open_box_with_puppeteer(page, wallet_address, private_key, box_id):
-    try:
-        timestamp = int(time.time() * 1000)
-        message = f'Open blind box {box_id} at {timestamp}'
-        signature = sign_message(message, private_key)
-
-        body = {
-            'box_id': box_id,
-            'signature': signature,
-            'message': message
-        }
-
-        api_url = f'https://bubuverse.fun/api/users/{wallet_address}/blind-boxes/open'
-
-        max_retries = 3
-        attempt = 0
-        response = None
-
-        while attempt < max_retries:
-            try:
-                response = await page.evaluate('''
-                    async (url, requestBody) => {
-                        const response = await fetch(url, {
-                            method: 'POST',
-                            headers: {
-                                'accept': '*/*',
-                                'content-type': 'application/json',
-                                'referer': 'https://bubuverse.fun/space'
-                            },
-                            body: JSON.stringify(requestBody),
-                            mode: 'cors',
-                            credentials: 'include'
-                        });
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                        }
-                        return await response.json();
-                    }
-                ''', api_url, body)
-
-                break
-            except Exception as err:
-                attempt += 1
-                if attempt == max_retries:
-                    raise err
-                print(Fore.YELLOW + f'Retrying open box ({attempt}/{max_retries})...')
-                await asyncio.sleep(2)
-
-        return response
-    except Exception as e:
-        raise Exception(f'Failed to open box: {str(e)}')
-
-async def open_boxes(user_agents, wallet_data, open_data):
-    for i, wallet in enumerate(wallet_data):
-        if 'deviceId' not in wallet:
-            wallet['deviceId'] = str(uuid.uuid4()).replace('-', '')
-        if 'userAgent' not in wallet:
-            wallet['userAgent'] = random.choice(user_agents)
-
-        if wallet['publicKey'] in open_data and len(open_data[wallet['publicKey']]) > 0:
-            nft_info = get_nft_info(open_data[wallet['publicKey']][0])
-            print(f'\n[{i + 1}/{len(wallet_data)}] {Fore.CYAN}{wallet["publicKey"][:8]}...')
-            print(f'{Fore.LIGHTBLACK_EX}Skipping - already has {nft_info["color"]}{nft_info["rarity"]}')
-            await asyncio.sleep(1)
-            continue
-
-        print(f'\n[{i + 1}/{len(wallet_data)}] {Fore.CYAN}{wallet["publicKey"][:8]}...')
-
-        session_data = None
-        try:
-            print(f'{Fore.YELLOW}Fetching cookies...')
-            session_data = await get_browser_session(wallet['userAgent'])
-            print(f'{Fore.GREEN}Cookies OK')
-
-            wallet['vcrcsCookie'] = session_data['vcrcs_cookie']
-            wallet['allCookies'] = session_data['all_cookies']
-            wallet['cookieCreatedAt'] = session_data['cookie_created_at']
-            wallet['cookieExpiresAt'] = session_data['cookie_expires_at']
-
-            await save_wallet_data('wallet_sol.json', wallet_data)
-        except Exception as e:
-            print(f'{Fore.RED}Cookie error: {str(e)}')
-            if session_data and session_data['browser']:
-                await session_data['browser'].close()
-            continue
-
-        try:
-            print(f'{Fore.YELLOW}Checking boxes...')
-            boxes = await get_boxes_with_puppeteer(session_data['page'], wallet['publicKey'])
-
-            if not boxes:
-                print(f'{Fore.LIGHTBLACK_EX}No boxes available')
-                await session_data['browser'].close()
-                continue
-
-            print(f'{Fore.GREEN}Found {Fore.WHITE}{len(boxes)} {Fore.GREEN}boxes')
-
-            if wallet['publicKey'] not in open_data:
-                open_data[wallet['publicKey']] = []
-
-            success_count = 0
-            fail_count = 0
-
-            for j, box in enumerate(boxes):
-                box_id = box['id']
-                try:
-                    print(f'{Fore.YELLOW}Opening box {Fore.WHITE}{j + 1}/{Fore.WHITE}{len(boxes)}...')
-                    result = await open_box_with_puppeteer(session_data['page'], wallet['publicKey'], wallet['privateKey'], box_id)
-                    template_id = result['template_id']
-
-                    open_data[wallet['publicKey']].append(template_id)
-                    nft_info = get_nft_info(template_id)
-                    print(nft_info['color'] + f'  → {nft_info["rarity"]} - {nft_info["name"]}')
-
-                    success_count += 1
-                    if j < len(boxes) - 1:
-                        await asyncio.sleep(2)
-                except Exception as e:
-                    print(f'  → {Fore.RED}Error: {str(e)}')
-                    fail_count += 1
-                    if j < len(boxes) - 1:
-                        await asyncio.sleep(2)
-
-            print(f'{Fore.GREEN}Completed: {Fore.WHITE}{success_count} {Fore.GREEN}OK, {Fore.WHITE}{fail_count} {Fore.RED}failed')
-            await save_wallet_data('open.json', open_data)
-            await session_data['browser'].close()
-        except Exception as e:
-            print(f'{Fore.RED}Processing error: {str(e)}')
-            if session_data and session_data['browser']:
-                await session_data['browser'].close()
-
-        if i < len(wallet_data) - 1:
-            print(f'{Fore.LIGHTBLACK_EX}Waiting 3s...')
-            await asyncio.sleep(3)
-
-    show_box_stats(open_data)
-
-async def stake_nfts(page, wallet_address, private_key):
-    try:
-        timestamp = int(time.time() * 1000)
-        message = f'Stake NFTs at {timestamp}'
-        signature = sign_message(message, private_key)
-
-        body = {
-            'signature': signature,
-            'message': message
-        }
-
-        api_url = f'https://bubuverse.fun/api/users/{wallet_address}/nfts/stake'
-
-        max_retries = 3
-        attempt = 0
-        response = None
-
-        while attempt < max_retries:
-            try:
-                response = await page.evaluate('''
-                    async (url, requestBody) => {
-                        const response = await fetch(url, {
-                            method: 'POST',
-                            headers: {
-                                'accept': '*/*',
-                                'content-type': 'application/json'
-                            },
-                            body: JSON.stringify(requestBody),
-                            mode: 'cors',
-                            credentials: 'include'
-                        });
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                        }
-                        return await response.json();
-                    }
-                ''', api_url, body)
-
-                break
-            except Exception as err:
-                attempt += 1
-                if attempt == max_retries:
-                    raise err
-                print(Fore.YELLOW + f'Retrying stake ({attempt}/{max_retries})...')
-                await asyncio.sleep(2)
-
-        return response
-    except Exception as e:
-        raise Exception(f'Failed to stake NFTs: {str(e)}')
-
-async def stake_wallets(user_agents, wallet_data, open_data):
-    for i, wallet in enumerate(wallet_data):
-        if 'deviceId' not in wallet:
-            wallet['deviceId'] = str(uuid.uuid4()).replace('-', '')
-        if 'userAgent' not in wallet:
-            wallet['userAgent'] = random.choice(user_agents)
-
-        if wallet['publicKey'] in open_data and any(isinstance(nft, dict) and nft.get('staked') for nft in open_data[wallet['publicKey']]):
-            print(f'\n[{i + 1}/{len(wallet_data)}] {Fore.CYAN}{wallet["publicKey"][:8]}...')
-            print(f'{Fore.LIGHTBLACK_EX}Skipping - already staked')
-            await asyncio.sleep(1)
-            continue
-
-        if wallet['publicKey'] not in open_data or not open_data[wallet['publicKey']]:
-            print(f'\n[{i + 1}/{len(wallet_data)}] {Fore.CYAN}{wallet["publicKey"][:8]}...')
-            print(f'{Fore.LIGHTBLACK_EX}Skipping - no NFTs')
-            await asyncio.sleep(1)
-            continue
-
-        print(f'\n[{i + 1}/{len(wallet_data)}] {Fore.CYAN}{wallet["publicKey"][:8]}...')
-
-        session_data = None
-        try:
-            print(f'{Fore.YELLOW}Fetching cookies...')
-            session_data = await get_browser_session(wallet['userAgent'])
-            print(f'{Fore.GREEN}Cookies OK')
-        except Exception as e:
-            print(f'{Fore.RED}Cookie error: {str(e)}')
-            if session_data and session_data['browser']:
-                await session_data['browser'].close()
-            continue
-
-        try:
-            print(f'{Fore.YELLOW}Staking NFTs...')
-            stake_result = await stake_nfts(session_data['page'], wallet['publicKey'], wallet['privateKey'])
-
-            if stake_result.get('success'):
-                total_nfts = stake_result['data']['total_nfts']
-                success_count = stake_result['data']['success_count']
-                failed_count = stake_result['data']['failed_count']
-                print(f'{Fore.GREEN}Stake successful: {Fore.WHITE}{success_count}/{Fore.WHITE}{total_nfts} {Fore.GREEN}NFTs')
-
-                if failed_count > 0:
-                    print(f'{Fore.RED}Error: {Fore.WHITE}{failed_count} {Fore.RED}NFTs failed')
-                    if stake_result['data'].get('error_messages'):
-                        for msg in stake_result['data']['error_messages']:
-                            print(f'  → {Fore.RED}{msg}')
-
-                if wallet['publicKey'] not in open_data:
-                    open_data[wallet['publicKey']] = []
-
-                open_data[wallet['publicKey']] = [
-                    {
-                        'templateId': nft if isinstance(nft, str) else nft['templateId'],
-                        'staked': True,
-                        'stakedAt': time.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
-                        'stakeResult': {
-                            'total_nfts': total_nfts,
-                            'success_count': success_count,
-                            'failed_count': failed_count,
-                            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                        }
-                    } for nft in open_data[wallet['publicKey']]
-                ]
-
-                await save_wallet_data('open.json', open_data)
-            else:
-                print(f'{Fore.RED}Stake failed')
-
-            await session_data['browser'].close()
-        except Exception as e:
-            print(f'{Fore.RED}Stake error: {str(e)}')
-            if session_data and session_data['browser']:
-                await session_data['browser'].close()
-
-        if i < len(wallet_data) - 1:
-            print(f'{Fore.LIGHTBLACK_EX}Waiting 3s...')
-            await asyncio.sleep(3)
-
-    show_stake_stats(len(wallet_data), open_data)
-
-def show_box_stats(open_data):
-    print(f'\n{Fore.CYAN}=== Box Opening Statistics ===')
-    if not open_data:
-        print(f'{Fore.LIGHTBLACK_EX}No data available')
-        return
-
-    total_boxes = 0
-    rarity_count = {'10x': 0, '100x': 0, '1000x': 0}
-
-    for templates in open_data.values():
-        for template in templates:
-            total_boxes += 1
-            nft_info = get_nft_info(template if isinstance(template, str) else template['templateId'])
-            if '10x' in nft_info['rarity']:
-                rarity_count['10x'] += 1
-            elif '100x' in nft_info['rarity']:
-                rarity_count['100x'] += 1
-            elif '1000x' in nft_info['rarity']:
-                rarity_count['1000x'] += 1
-
-    print(f'\n{Fore.CYAN}Summary:')
-    print(f'{Fore.GREEN}NFT 10x: {Fore.WHITE}{rarity_count["10x"]}')
-    print(f'{Fore.YELLOW}NFT 100x: {Fore.WHITE}{rarity_count["100x"]}')
-    print(f'{Fore.MAGENTA}NFT 1000x: {Fore.WHITE}{rarity_count["1000x"]}')
-    print(f'{Fore.BLUE}Total boxes: {Fore.WHITE}{total_boxes}')
-
-def show_stake_stats(total_wallets, open_data):
-    print(f'\n{Fore.CYAN}=== Staking Statistics ===')
-    if not open_data:
-        print(f'{Fore.LIGHTBLACK_EX}No data available')
-        return
-
-    wallets_with_staked_nfts = 0
-    total_nfts = 0
-    total_staked_nfts = 0
-
-    for nfts in open_data.values():
-        wallet_staked_count = 0
-        for nft in nfts:
-            total_nfts += 1
-            if isinstance(nft, dict) and nft.get('staked'):
-                wallet_staked_count += 1
-                total_staked_nfts += 1
-        if wallet_staked_count > 0:
-            wallets_with_staked_nfts += 1
-
-    print(f'\n{Fore.CYAN}Summary:')
-    print(f'{Fore.GREEN}Wallets with staked NFTs: {Fore.WHITE}{wallets_with_staked_nfts}/{Fore.WHITE}{total_wallets}')
-    print(f'{Fore.GREEN}NFTs staked: {Fore.WHITE}{total_staked_nfts}/{Fore.WHITE}{total_nfts}')
 
 async def main():
     user_agents = await load_file('ua.txt')
     wallet_data = await load_wallet_data('wallet_sol.json')
-    open_data = await load_wallet_data('open.json')
-
     print(Fore.CYAN + '\n=== BUBUVERSE AUTOMATION TOOL ===')
     print(f'{Fore.GREEN}Loaded {Fore.WHITE}{len(user_agents)} {Fore.GREEN}user agents\n')
 
     while True:
         print(Fore.CYAN + '\nMenu:')
         print(Fore.GREEN + '1. Create Wallets')
-        print(Fore.GREEN + '2. Open Blind Boxes')
-        print(Fore.GREEN + '3. Stake NFTs')
-        print(Fore.GREEN + '4. Show Box Statistics')
-        print(Fore.GREEN + '5. Show Stake Statistics')
-        print(Fore.GREEN + '6. Exit')
-
-        choice = input(Fore.YELLOW + 'Select an option (1-6): ')
+        print(Fore.GREEN + '2. Exit')
+        choice = input(Fore.YELLOW + 'Select an option (1-2): ')
 
         if choice == '1':
             await create_wallets(user_agents, wallet_data)
         elif choice == '2':
-            if not wallet_data:
-                print(Fore.RED + 'No wallets found in wallet_sol.json! Please create wallets first.')
-                continue
-            await open_boxes(user_agents, wallet_data, open_data)
-        elif choice == '3':
-            if not wallet_data:
-                print(Fore.RED + 'No wallets found in wallet_sol.json! Please create wallets first.')
-                continue
-            if not open_data:
-                print(Fore.RED + 'No NFTs found in open.json! Please open boxes first.')
-                continue
-            await stake_wallets(user_agents, wallet_data, open_data)
-        elif choice == '4':
-            show_box_stats(open_data)
-        elif choice == '5':
-            show_stake_stats(len(wallet_data), open_data)
-        elif choice == '6':
             print(Fore.GREEN + 'Exiting... Saving data...')
             await save_wallet_data('wallet_sol.json', wallet_data)
-            await save_wallet_data('open.json', open_data)
             print(Fore.GREEN + 'Data saved. Goodbye!')
             return
         else:
-            print(Fore.RED + 'Invalid option! Please select 1-6.')
+            print(Fore.RED + 'Invalid option! Please select 1-2.')
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
+    except IndexError as e:
+        print(Fore.RED + f'[!] Error: {str(e)}. Please ensure ua.txt contains valid user agent strings.')
     except KeyboardInterrupt:
         print(f'\n\n{Fore.YELLOW}Saving data...')
         asyncio.run(save_wallet_data('wallet_sol.json', wallet_data))
-        asyncio.run(save_wallet_data('open.json', open_data))
         print(f'{Fore.GREEN}Data saved')
         exit(0)
     except Exception as e:
