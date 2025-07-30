@@ -14,7 +14,8 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from capmonster_python import RecaptchaV2Task  # CapMonster for reCAPTCHA v2
+from capmonster_python.recaptcha_v2 import RecaptchaV2Task  # Import reCAPTCHA v2 task
+from capmonster_python.capmonster_client import CapMonsterClient  # Import CapMonsterClient
 
 init(autoreset=True)
 
@@ -234,7 +235,8 @@ async def create_wallets(user_agents, wallet_data):
 
                 # Inject CAPTCHA solution
                 await page.evaluate(f'''(solution) => {{
-                    document.getElementById("g-recaptcha-response").innerHTML = "{captcha_solution}";
+                    const textarea = document.getElementById("g-recaptcha-response");
+                    if (textarea) textarea.innerHTML = solution;
                 }}''', captcha_solution)
 
                 # Submit CAPTCHA form if required
