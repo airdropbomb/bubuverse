@@ -6,3 +6,5 @@ colorama
 python-dotenv
 aiofiles
 pyppeteer-stealth
+cryptography
+urllib3
