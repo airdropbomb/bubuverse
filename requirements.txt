@@ -8,3 +8,4 @@ aiofiles
 pyppeteer-stealth
 cryptography
 urllib3
+capmonster-python
