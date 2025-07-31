@@ -14,7 +14,8 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from capmonster_python import RecaptchaV2Task  # Correct import
+from capmonster_python import RecaptchaV2Task  # Default: reCAPTCHA v2
+# from capmonster_python import TurnstileTask  # Uncomment for Cloudflare Turnstile
 
 init(autoreset=True)
 
@@ -115,12 +116,19 @@ async def load_wallet_data(file_path):
     except FileNotFoundError:
         return []
 
-async def solve_captcha(api_key, website_url, website_key):
+async def solve_captcha(api_key, website_url, website_key, is_turnstile=False):
     try:
-        task = RecaptchaV2Task(api_key)
-        task_id = task.create_task(website_url=website_url, website_key=website_key)
-        result = task.join_task_result(task_id)
-        return result.get("gRecaptchaResponse")
+        if is_turnstile:
+            from capmonster_python import TurnstileTask
+            task = TurnstileTask(api_key)
+            task_id = task.create_task(website_url=website_url, website_key=website_key)
+            result = task.join_task_result(task_id)
+            return result.get("token")
+        else:
+            task = RecaptchaV2Task(api_key)
+            task_id = task.create_task(website_url=website_url, website_key=website_key)
+            result = task.join_task_result(task_id)
+            return result.get("gRecaptchaResponse")
     except Exception as e:
         print(Fore.RED + f"[!] Error solving CAPTCHA: {str(e)}")
         return None
@@ -217,28 +225,56 @@ async def create_wallets(user_agents, wallet_data):
             if 'error' in page_title.lower() or 'blocked' in page_title.lower() or 'checkpoint' in page_title.lower():
                 print(Fore.YELLOW + "[!] Detected Vercel Security Checkpoint. Attempting to solve CAPTCHA...")
 
-                # Get site key for reCAPTCHA
-                website_key = await page.evaluate('''() => {
-                    const element = document.querySelector('[data-sitekey]');
-                    return element ? element.getAttribute('data-sitekey') : null;
+                # Check for CAPTCHA type (reCAPTCHA or Turnstile)
+                captcha_info = await page.evaluate('''() => {
+                    const recaptcha = document.querySelector('.g-recaptcha[data-sitekey]');
+                    const turnstile = document.querySelector('.cf-turnstile[data-sitekey]');
+                    if (recaptcha) {
+                        return { type: 'recaptcha', sitekey: recaptcha.getAttribute('data-sitekey') };
+                    } else if (turnstile) {
+                        return { type: 'turnstile', sitekey: turnstile.getAttribute('data-sitekey') };
+                    }
+                    return { type: null, sitekey: null };
                 }''')
-                if not website_key:
-                    raise Exception("Could not find reCAPTCHA site key!")
 
-                print(Fore.YELLOW + f"[DEBUG] Found reCAPTCHA site key: {website_key}")
+                website_key = captcha_info['sitekey']
+                is_turnstile = captcha_info['type'] == 'turnstile'
+
+                if not website_key:
+                    # Retry with longer wait time
+                    print(Fore.YELLOW + "[!] Retrying site key extraction after additional wait...")
+                    await asyncio.sleep(10)
+                    captcha_info = await page.evaluate('''() => {
+                        const recaptcha = document.querySelector('.g-recaptcha[data-sitekey]');
+                        const turnstile = document.querySelector('.cf-turnstile[data-sitekey]');
+                        if (recaptcha) {
+                            return { type: 'recaptcha', sitekey: recaptcha.getAttribute('data-sitekey') };
+                        } else if (turnstile) {
+                            return { type: 'turnstile', sitekey: turnstile.getAttribute('data-sitekey') };
+                        }
+                        return { type: null, sitekey: null };
+                    }''')
+                    website_key = captcha_info['sitekey']
+                    is_turnstile = captcha_info['type'] == 'turnstile'
+
+                if not website_key:
+                    raise Exception("Could not find CAPTCHA site key!")
+
+                print(Fore.YELLOW + f"[DEBUG] Found {captcha_info['type']} site key: {website_key}")
 
                 # Solve CAPTCHA using CapMonster
-                captcha_solution = await solve_captcha(api_key, target_url, website_key)
+                captcha_solution = await solve_captcha(api_key, target_url, website_key, is_turnstile)
                 if not captcha_solution:
                     raise Exception("Failed to solve CAPTCHA!")
 
                 print(Fore.GREEN + f"[DEBUG] CAPTCHA solved: {captcha_solution}")
 
                 # Inject CAPTCHA solution
-                await page.evaluate(f'''(solution) => {{
-                    const textarea = document.getElementById("g-recaptcha-response");
+                response_field = "cf-turnstile-response" if is_turnstile else "g-recaptcha-response"
+                await page.evaluate(f'''(solution, field) => {{
+                    const textarea = document.getElementById(field);
                     if (textarea) textarea.innerHTML = solution;
-                }}''', captcha_solution)
+                }}''', captcha_solution, response_field)
 
                 # Submit CAPTCHA form if required
                 await page.evaluate('''() => {
