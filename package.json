@@ -1,0 +1,21 @@
+{
+  "name": "bubuverse-automation",
+  "version": "1.0.0",
+  "description": "Automation tool for Bubuverse wallet creation, daily check-in, box opening, and NFT staking",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.3",
+    "bip39": "^3.1.0",
+    "bs58": "^6.0.0",
+    "colors": "^1.4.0",
+    "ed25519-hd-key": "^2.1.0",
+    "puppeteer": "^23.5.3",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "tweetnacl": "^1.0.3",
+    "uuid": "^10.0.0"
+  }
+}
