@@ -14,7 +14,7 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from capmonster_python import RecaptchaV2Task, CapMonsterClient
+from capmonster_python import RecaptchaV2Task  # Correct import
 
 init(autoreset=True)
 
@@ -115,9 +115,9 @@ async def load_wallet_data(file_path):
     except FileNotFoundError:
         return []
 
-async def solve_captcha(capmonster_client, website_url, website_key):
+async def solve_captcha(api_key, website_url, website_key):
     try:
-        task = RecaptchaV2Task(capmonster_client)
+        task = RecaptchaV2Task(api_key)
         task_id = task.create_task(website_url=website_url, website_key=website_key)
         result = task.join_task_result(task_id)
         return result.get("gRecaptchaResponse")
@@ -131,18 +131,20 @@ async def create_wallets(user_agents, wallet_data):
     if not api_key:
         print(Fore.RED + "[!] Cannot proceed without a valid CapMonster API key.")
         return
-    capmonster_client = CapMonsterClient(api_key=api_key)
 
     if not user_agents:
         print(Fore.RED + "[!] Error: No user agents found in ua.txt. Please populate ua.txt with valid user agent strings.")
         return
     if not proxies:
         print(Fore.YELLOW + "[!] No proxies found. Running without proxy.")
-    elif len(proxies) < count:
-        print(Fore.YELLOW + f"[!] Warning: Only {len(proxies)} proxies available for {count} wallets. Some wallets may reuse proxies.")
+    else:
+        print(Fore.GREEN + f"[+] Loaded {len(proxies)} proxies.")
 
     referrer_address = input(Fore.YELLOW + 'Enter referrerAddress: ')
     count = int(input(Fore.YELLOW + 'Enter number of wallets to create: '))
+
+    if len(proxies) < count:
+        print(Fore.YELLOW + f"[!] Warning: Only {len(proxies)} proxies available for {count} wallets. Some wallets may reuse proxies.")
 
     for i in range(count):
         print(Fore.CYAN + f'\n[{i + 1}/{count}] === CREATING NEW WALLET ===')
@@ -226,7 +228,7 @@ async def create_wallets(user_agents, wallet_data):
                 print(Fore.YELLOW + f"[DEBUG] Found reCAPTCHA site key: {website_key}")
 
                 # Solve CAPTCHA using CapMonster
-                captcha_solution = await solve_captcha(capmonster_client, target_url, website_key)
+                captcha_solution = await solve_captcha(api_key, target_url, website_key)
                 if not captcha_solution:
                     raise Exception("Failed to solve CAPTCHA!")
 
