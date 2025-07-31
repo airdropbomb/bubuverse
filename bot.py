@@ -14,8 +14,7 @@ import base58
 import aiofiles
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-from capmonster_python import RecaptchaV2Task  # Default: reCAPTCHA v2
-# from capmonster_python import TurnstileTask  # Uncomment for Cloudflare Turnstile
+from capmonster_python import TurnstileTask, RecaptchaV2Task
 
 init(autoreset=True)
 
@@ -50,7 +49,7 @@ async def load_file(file_path):
             if not lines:
                 print(Fore.YELLOW + f"[!] {file_path} is empty. Generating random user agents...")
                 generated = [
-                    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
+                    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(90, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
                     for _ in range(1000)
                 ]
                 async with aiofiles.open(file_path, mode='w') as f:
@@ -61,7 +60,7 @@ async def load_file(file_path):
     except FileNotFoundError:
         print(Fore.YELLOW + f"[!] {file_path} not found. Generating random user agents...")
         generated = [
-            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(70, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
+            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{random.randint(90, 120)}.0.{random.randint(1000, 5000)}.0 Safari/537.36"
             for _ in range(1000)
         ]
         async with aiofiles.open(file_path, mode='w') as f:
@@ -119,7 +118,6 @@ async def load_wallet_data(file_path):
 async def solve_captcha(api_key, website_url, website_key, is_turnstile=False):
     try:
         if is_turnstile:
-            from capmonster_python import TurnstileTask
             task = TurnstileTask(api_key)
             task_id = task.create_task(website_url=website_url, website_key=website_key)
             result = task.join_task_result(task_id)
@@ -182,7 +180,9 @@ async def create_wallets(user_agents, wallet_data):
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-blink-features=AutomationControlled',
                 '--no-first-run',
-                '--disable-infobars'
+                '--disable-infobars',
+                '--disable-dev-shm-usage',
+                '--window-size=1280,720'
             ]
             if proxy:
                 browser_args.append(f'--proxy-server={proxy["host"]}:{proxy["port"]}')
@@ -196,16 +196,32 @@ async def create_wallets(user_agents, wallet_data):
                     'username': proxy['username'],
                     'password': proxy['password']
                 })
-            await page.setViewport({'width': 1024, 'height': 768})
+            await page.setViewport({'width': 1280, 'height': 720})
             await page.setUserAgent(user_agent)
             await stealth(page)  # Apply stealth mode
 
-            # Additional stealth settings
+            # Bypass Developer Tools detection
             await page.evaluateOnNewDocument('''() => {
+                Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
+                Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight });
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
                 window.navigator.chrome = { runtime: {} };
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                const originalConsole = window.console;
+                Object.defineProperty(window, 'console', {
+                    value: {
+                        log: (...args) => originalConsole.log(...args),
+                        warn: (...args) => originalConsole.warn(...args),
+                        error: (...args) => originalConsole.error(...args),
+                        info: (...args) => originalConsole.info(...args),
+                        debug: (...args) => originalConsole.debug(...args)
+                    },
+                    writable: false
+                });
+                Object.defineProperty(window, 'devtools', {
+                    get: () => ({ isOpen: false })
+                });
             }''')
 
             target_url = 'https://bubuverse.fun/space'
@@ -267,7 +283,7 @@ async def create_wallets(user_agents, wallet_data):
                 if not captcha_solution:
                     raise Exception("Failed to solve CAPTCHA!")
 
-                print(Fore.GREEN + f"[DEBUG] CAPTCHA solved: {captcha_solution}")
+                print(Fore.GREEN + f"[DEBUG] CAPTCHA solved: {captcha_solution[:50]}...")
 
                 # Inject CAPTCHA solution
                 response_field = "cf-turnstile-response" if is_turnstile else "g-recaptcha-response"
@@ -278,7 +294,9 @@ async def create_wallets(user_agents, wallet_data):
 
                 # Submit CAPTCHA form if required
                 await page.evaluate('''() => {
-                    const submitButton = document.querySelector('button[type="submit"]') || document.querySelector('#recaptcha-demo-submit');
+                    const submitButton = document.querySelector('button[type="submit"]') || 
+                                        document.querySelector('#recaptcha-demo-submit') ||
+                                        document.querySelector('input[type="submit"]');
                     if (submitButton) submitButton.click();
                 }''')
 
@@ -297,7 +315,7 @@ async def create_wallets(user_agents, wallet_data):
             if not vcrcs_cookie:
                 raise Exception("Could not find _vcrcs cookie!")
 
-            print(Fore.GREEN + f"[DEBUG] Found _vcrcs cookie: {vcrcs_cookie['value']}")
+            print(Fore.GREEN + f"[DEBUG] Found _vcrcs cookie: {vcrcs_cookie['value'][:50]}...")
 
             max_retries = 3
             attempt = 0
@@ -311,7 +329,7 @@ async def create_wallets(user_agents, wallet_data):
                                 method: 'POST',
                                 headers: {
                                     'accept': '*/*',
-                                    'accept-language': 'vi-VN,vi;q=0.9',
+                                    'accept-language': 'en-US,en;q=0.9',
                                     'content-type': 'application/json',
                                     'user-agent': navigator.userAgent,
                                     'referer': location.href,
